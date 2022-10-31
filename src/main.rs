@@ -1,3 +1,5 @@
+use std::ops::{Add, Div};
+
 use bevy::{prelude::*, sprite::collide_aabb};
 
 const WIN_WIDTH: f32 = 800.0;
@@ -14,6 +16,9 @@ struct FuelStatusText;
 
 #[derive(Component, Deref, DerefMut)]
 struct Velocity(Vec2);
+
+#[derive(Component, Deref, DerefMut)]
+struct BoundingBox(Vec2);
 
 #[derive(Component)]
 struct Rigid;
@@ -50,9 +55,13 @@ fn setup(mut commands: Commands, mut windows: ResMut<Windows>, asset_server: Res
             },
             ..default()
         })
-        .insert(Velocity(Vec2::new(100.0, 100.0)))
+        .insert(Velocity(Vec2::new(
+            rand::random::<f32>() * 200.0 - 100.0,
+            rand::random::<f32>() * 200.0 - 100.0,
+        )))
         .insert(WrapAround {})
-        .insert(Fuel(100.0));
+        .insert(Fuel(100.0))
+        .insert(BoundingBox(Vec2::new(30.0, 30.0)));
 
     // Spawn the fuel text
     commands
@@ -172,36 +181,53 @@ fn fuel_cell_spawn_system(
                 ..default()
             })
             .insert(Velocity(Vec2::new(
-                rand::random::<f32>() * 40.0 - 20.0,
-                rand::random::<f32>() * 40.0 - 20.0,
+                rand::random::<f32>() * 60.0 - 30.0,
+                rand::random::<f32>() * 60.0 - 30.0,
             )))
             .insert(FuelCell {})
             .insert(WrapAround {})
-            .insert(Rigid {});
+            .insert(Rigid {})
+            .insert(BoundingBox(Vec2::new(10.0, 10.0)));
     }
 }
 
-// fn rigid_collision_system(
-//     mut query: Query<(Entity, &mut Transform, &mut Velocity), With<Rigid>>,
-//     query_ref: Query<(Entity, &Transform, &Velocity), With<Rigid>>,
-// ) {
-//     for (id, transform, velocity) in query.iter_mut() {
-//         for (id_ref, ref_transform, ref_velocity) in query_ref.iter() {
-//             if id == id_ref {
-//                 continue;
-//             }
-//             let c = collide_aabb::collide(
-//                 transform.translation,
-//                 Vec2::new(10.0, 10.0),
-//                 ref_transform.translation,
-//                 Vec2::new(10.0, 10.0),
-//             );
-//             if c.is_some() {
-//                 println!("Collision!");
-//             }
-//         }
-//     }
-// }
+fn rigid_collision_system(
+    mut query: Query<(&mut Transform, &mut Velocity, &BoundingBox), With<Rigid>>,
+) {
+    let mut iter = query.iter_combinations_mut();
+    while let Some([(t1, mut v1, bb1), (t2, mut v2, bb2)]) = iter.fetch_next() {
+        let c = collide_aabb::collide(t1.translation, bb1.0, t2.translation, bb2.0);
+        if c.is_some() {
+            let temp = **v1;
+            let vv1 = v1.as_mut();
+            *vv1 = Velocity(vv1.add(v2.0).div(2.0));
+
+            let vv2 = v2.as_mut();
+            *vv2 = Velocity(vv2.add(temp).div(2.0));
+        }
+    }
+}
+
+fn pickup_fuel_cell_system(
+    query: Query<(Entity, &Transform, &BoundingBox), With<FuelCell>>,
+    mut player: Query<(&Transform, &BoundingBox, &mut Fuel), With<Player>>,
+    mut commands: Commands,
+) {
+    let (player_transform, player_bb, mut fuel) = player.get_single_mut().unwrap();
+    for (cell, cell_transform, cell_bb) in query.iter() {
+        if collide_aabb::collide(
+            player_transform.translation,
+            player_bb.0,
+            cell_transform.translation,
+            cell_bb.0,
+        )
+        .is_some()
+        {
+            commands.entity(cell).despawn();
+            fuel.0 += 100.0;
+        }
+    }
+}
 
 fn main() {
     App::new()
@@ -213,6 +239,7 @@ fn main() {
         .add_system(wrap_around_system)
         .add_system(update_fuel_text_system)
         .add_system(fuel_cell_spawn_system)
-        // .add_system(rigid_collision_system)
+        .add_system(rigid_collision_system)
+        .add_system(pickup_fuel_cell_system)
         .run();
 }
